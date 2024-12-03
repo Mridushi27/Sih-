@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cassava Leaf Disease Classifier</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Tailwind Configuration
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                        },
+                    },
+                },
+            },
+        }
+
+        // JavaScript for file handling and preview
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.getElementById('file-upload');
+            const previewImage = document.getElementById('image-preview');
+            const predictButton = document.getElementById('predict-button');
+            const predictionsContainer = document.getElementById('predictions-container');
+
+            fileInput.addEventListener('change', function(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        previewImage.src = e.target.result;
+                        previewImage.classList.remove('hidden');
+                        predictButton.disabled = false;
+                        predictButton.classList.remove('bg-gray-300', 'cursor-not-allowed');
+                        predictButton.classList.add('bg-green-500', 'hover:bg-green-600');
+                    }
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            predictButton.addEventListener('click', function() {
+                // Simulated prediction results (replace with actual backend call in a real implementation)
+                const mockPredictions = [
+                    { disease: 'Cassava Healthy', probability: 0.75 },
+                    { disease: 'Cassava Brown Streak Disease', probability: 0.20 },
+                    { disease: 'Cassava Bacterial Blight', probability: 0.05 }
+                ];
+
+                predictionsContainer.innerHTML = `
+                    <h2 class="text-2xl font-bold text-center text-green-700 mb-4">Prediction Results</h2>
+                    <div class="grid grid-cols-3 gap-4">
+                        ${mockPredictions.map((pred, index) => `
+                            <div class="p-4 rounded-lg ${index === 0 ? 'bg-green-100' : 'bg-gray-100'}">
+                                <h3 class="font-bold">${pred.disease}</h3>
+                                <p>Probability: ${(pred.probability * 100).toFixed(2)}%</p>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            });
+        });
+    </script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-2xl mx-auto bg-white shadow-lg rounded-lg p-8">
+            <h1 class="text-3xl font-bold text-center mb-6 text-green-700">
+                Cassava Leaf Disease Classifier
+            </h1>
+
+            <form class="space-y-4">
+                <div class="flex flex-col items-center">
+                    <input 
+                        type="file" 
+                        id="file-upload"
+                        accept="image/*"
+                        class="mb-4 w-full text-sm text-slate-500
+                            file:mr-4 file:py-2 file:px-4
+                            file:rounded-full file:border-0
+                            file:text-sm file:font-semibold
+                            file:bg-green-50 file:text-green-700
+                            hover:file:bg-green-100"
+                    />
+                    <img 
+                        id="image-preview" 
+                        alt="Preview" 
+                        class="max-w-md rounded-lg shadow-lg mb-4 hidden"
+                        style="max-height: 400px;"
+                    />
+                </div>
+
+                <button 
+                    id="predict-button"
+                    type="button"
+                    disabled
+                    class="w-full p-3 rounded-lg transition-colors duration-300 bg-gray-300 text-gray-500 cursor-not-allowed"
+                >
+                    Predict Disease
+                </button>
+            </form>
+
+            <div 
+                id="predictions-container" 
+                class="mt-6 space-y-4"
+            ></div>
+        </div>
+    </div>
+</body>
+</html>
