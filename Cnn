@@ -1,0 +1,173 @@
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.optimizers impo rt Adam
+import matplotlib.pyplot as plt
+
+# Set random seed for reproducibility
+tf.random.set_seed(42)
+
+class PetBreedClassifier:
+    def __init__(self, img_height=224, img_width=224, num_classes=3):
+        """
+        Initialize CNN for pet breed classification
+        
+        Args:
+            img_height (int): Height of input images
+            img_width (int): Width of input images
+            num_classes (int): Number of pet breed classes
+        """
+        self.img_height = img_height
+        self.img_width = img_width
+        self.num_classes = num_classes
+        self.model = None
+    
+    def create_model(self):
+        """
+        Create a CNN model for image classification
+        """
+        self.model = models.Sequential([
+            # Convolutional layers
+            layers.Conv2D(32, (3, 3), activation='relu', input_shape=(self.img_height, self.img_width, 3)),
+            layers.MaxPooling2D((2, 2)),
+            
+            layers.Conv2D(64, (3, 3), activation='relu'),
+            layers.MaxPooling2D((2, 2)),
+            
+            layers.Conv2D(128, (3, 3), activation='relu'),
+            layers.MaxPooling2D((2, 2)),
+            
+            # Flatten and dense layers
+            layers.Flatten(),
+            layers.Dense(128, activation='relu'),
+            layers.Dropout(0.5),
+            layers.Dense(self.num_classes, activation='softmax')
+        ])
+        
+        # Compile the model
+        self.model.compile(
+            optimizer=Adam(learning_rate=0.0001),
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        return self.model
+    
+    def prepare_data(self, train_dir, validation_dir):
+        """
+        Prepare image data using data augmentation
+        
+        Args:
+            train_dir (str): Directory with training images
+            validation_dir (str): Directory with validation images
+        
+        Returns:
+            train_generator, validation_generator
+        """
+        # Data augmentation for training
+        train_datagen = ImageDataGenerator(
+            rescale=1./255,
+            rotation_range=20,
+            width_shift_range=0.2,
+            height_shift_range=0.2,
+            shear_range=0.2,
+            zoom_range=0.2,
+            horizontal_flip=True,
+            fill_mode='nearest'
+        )
+        
+        # Validation data should only be rescaled
+        validation_datagen = ImageDataGenerator(rescale=1./255)
+        
+        # Generate batches of tensor image data
+        train_generator = train_datagen.flow_from_directory(
+            train_dir,
+            target_size=(self.img_height, self.img_width),
+            batch_size=32,
+            class_mode='categorical'
+        )
+        
+        validation_generator = validation_datagen.flow_from_directory(
+            validation_dir,
+            target_size=(self.img_height, self.img_width),
+            batch_size=32,
+            class_mode='categorical'
+        )
+        
+        return train_generator, validation_generator
+    
+    def train_model(self, train_generator, validation_generator, epochs=20):
+        """
+        Train the CNN model
+        
+        Args:
+            train_generator: Training data generator
+            validation_generator: Validation data generator
+            epochs (int): Number of training epochs
+        
+        Returns:
+            Training history
+        """
+        history = self.model.fit(
+            train_generator,
+            steps_per_epoch=train_generator.samples // train_generator.batch_size,
+            validation_data=validation_generator,
+            validation_steps=validation_generator.samples // validation_generator.batch_size,
+            epochs=epochs
+        )
+        
+        return history
+    
+    def plot_training_history(self, history):
+        """
+        Plot training and validation accuracy/loss
+        
+        Args:
+            history: Model training history
+        """
+        plt.figure(figsize=(12, 4))
+        
+        # Accuracy plot
+        plt.subplot(1, 2, 1)
+        plt.plot(history.history['accuracy'], label='Training Accuracy')
+        plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+        plt.title('Model Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+        
+        # Loss plot
+        plt.subplot(1, 2, 2)
+        plt.plot(history.history['loss'], label='Training Loss')
+        plt.plot(history.history['val_loss'], label='Validation Loss')
+        plt.title('Model Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.show()
+
+# Example usage
+def main():
+    # Initialize the classifier
+    classifier = PetBreedClassifier(num_classes=3)  # Adjust number of classes as needed
+    
+    # Create the model
+    model = classifier.create_model()
+    model.summary()
+    
+    # Prepare data (replace with your actual directories)
+    train_generator, validation_generator = classifier.prepare_data(
+        train_dir='path/to/train/dataset',
+        validation_dir='path/to/validation/dataset'
+    )
+    
+    # Train the model
+    history = classifier.train_model(train_generator, validation_generator)
+    
+    # Plot training history
+    classifier.plot_training_history(history)
+
+if __name__ == '__main__':
+    main()
