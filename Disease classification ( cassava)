@@ -1,0 +1,229 @@
+import time
+from collections import OrderedDict
+from pathlib import Path
+import copy
+import logging
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.cuda.amp import autocast, GradScaler
+from torch.utils.tensorboard import SummaryWriter
+
+import albumentations
+from albumentations.pytorch.transforms import ToTensorV2
+from torchvision import models, transforms
+from sklearn.model_selection import StratifiedKFold
+from tqdm import tqdm
+from PIL import Image
+
+class CassavaLeafDiseaseConfig:
+    def __init__(self, 
+                 base_path='/kaggle/input/cassava-leaf-disease-classification/',
+                 size_crop=500, 
+                 num_epochs=10,
+                 folds=5,
+                 learning_rates={'transfer': 1e-4, 'classification': 5e-4},
+                 batch_sizes={'train': 64, 'valid': 300},
+                 device=None):
+        """
+        Comprehensive configuration for the Cassava Leaf Disease Classification project
+        
+        Args:
+            base_path (str): Base directory for input data
+            size_crop (int): Image crop size
+            num_epochs (int): Number of training epochs
+            folds (int): Number of cross-validation folds
+            learning_rates (dict): Learning rates for different model parts
+            batch_sizes (dict): Batch sizes for training and validation
+            device (torch.device): Computation device
+        """
+        self.base_path = base_path
+        self.images_path = Path(base_path) / 'train_images'
+        self.size_crop = size_crop
+        self.num_epochs = num_epochs
+        self.folds = folds
+        self.lr_transfer = learning_rates['transfer']
+        self.lr_classification = learning_rates['classification']
+        self.batch_size_train = batch_sizes['train']
+        self.batch_size_valid = batch_sizes['valid']
+        
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Setup logging
+        logging.basicConfig(level=logging.INFO, 
+                            format='%(asctime)s - %(levelname)s: %(message)s')
+        self.logger = logging.getLogger(__name__)
+
+class AdaptiveConcatPool2d(nn.Module):
+    def __init__(self, sz=None):
+        super().__init__()
+        sz = sz or (1, 1)
+        self.adaptive_max_pool = nn.AdaptiveMaxPool2d(sz)
+        self.adaptive_avg_pool = nn.AdaptiveAvgPool2d(sz)
+
+    def forward(self, x):
+        return torch.cat([self.adaptive_max_pool(x), self.adaptive_avg_pool(x)], 1)
+
+class AdvancedClassifier(nn.Module):
+    def __init__(self, input_features=4096, num_classes=5, dropout_rate=0.3):
+        super().__init__()
+        self.feature_extractor = nn.Sequential(
+            nn.Flatten(),
+            nn.BatchNorm1d(input_features),
+            nn.Dropout(p=dropout_rate),
+            nn.Linear(input_features, 1024),
+            nn.ReLU(),
+            nn.BatchNorm1d(1024),
+            nn.Dropout(p=dropout_rate/2),
+        )
+        self.classifier = nn.Linear(1024, num_classes)
+
+    def forward(self, x):
+        features = self.feature_extractor(x)
+        return self.classifier(features)
+
+class CassavaDataset(torch.utils.data.Dataset):
+    def __init__(self, dataframe, images_path, transforms=None):
+        self.dataframe = dataframe
+        self.images_path = images_path
+        self.transforms = transforms
+
+    def __len__(self):
+        return len(self.dataframe)
+
+    def __getitem__(self, idx):
+        row = self.dataframe.iloc[idx]
+        img_path = self.images_path / row['image_id']
+        
+        image = np.array(Image.open(img_path))
+        
+        if self.transforms:
+            augmented = self.transforms(image=image)
+            image = augmented['image']
+        
+        label = torch.tensor(row['label'], dtype=torch.long)
+        return image, label
+
+def create_data_augmentations(size):
+    """
+    Create flexible data augmentation transformations
+    
+    Args:
+        size (int): Target image size
+    
+    Returns:
+        dict of augmentation transforms for train and validation
+    """
+    train_transforms = albumentations.Compose([
+        albumentations.RandomResizedCrop(size, size),
+        albumentations.OneOf([
+            albumentations.HorizontalFlip(p=0.5),
+            albumentations.VerticalFlip(p=0.5),
+        ]),
+        albumentations.ShiftScaleRotate(p=0.5),
+        albumentations.ColorJitter(brightness=0.2, contrast=0.2, p=0.3),
+        albumentations.CoarseDropout(max_holes=8, max_height=size//20, max_width=size//20, p=0.5),
+        albumentations.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2()
+    ])
+    
+    val_transforms = albumentations.Compose([
+        albumentations.CenterCrop(size, size),
+        albumentations.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2()
+    ])
+    
+    return {
+        'train': train_transforms,
+        'valid': val_transforms
+    }
+
+class CassavaLeafDiseaseClassifier:
+    def __init__(self, config):
+        self.config = config
+        self.writer = SummaryWriter('runs/cassava_experiment')
+        
+    def prepare_data(self):
+        """Prepare data with stratified k-fold"""
+        df = pd.read_csv(self.config.base_path + 'train.csv', dtype={"label": "str"})
+        
+        # Stratified K-Fold
+        skf = StratifiedKFold(n_splits=self.config.folds, shuffle=True)
+        
+        for fold, (train_idx, val_idx) in enumerate(skf.split(df['image_id'], df['label'])):
+            df.loc[val_idx, 'fold'] = fold
+        
+        return df
+
+    def train_fold(self, df, fold):
+        """Train for a specific fold"""
+        # Data preparation
+        transforms = create_data_augmentations(self.config.size_crop)
+        
+        train_data = df[df['fold'] != fold]
+        val_data = df[df['fold'] == fold]
+        
+        train_dataset = CassavaDataset(train_data, self.config.images_path, transforms['train'])
+        val_dataset = CassavaDataset(val_data, self.config.images_path, transforms['valid'])
+        
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, 
+            batch_size=self.config.batch_size_train, 
+            shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, 
+            batch_size=self.config.batch_size_valid
+        )
+        
+        # Model setup
+        base_model = models.resnet50(pretrained=True)
+        model = nn.Sequential(
+            base_model,
+            AdaptiveConcatPool2d(),
+            AdvancedClassifier()
+        )
+        model = model.to(self.config.device)
+        
+        # Loss and Optimizer
+        weights = self._compute_class_weights(train_data)
+        criterion = nn.CrossEntropyLoss(weight=weights)
+        optimizer = self._create_optimizer(model)
+        
+        # Training loop
+        for epoch in range(self.config.num_epochs):
+            train_loss = self._train_epoch(model, train_loader, criterion, optimizer)
+            val_accuracy = self._validate_epoch(model, val_loader)
+            
+            # TensorBoard logging
+            self.writer.add_scalar(f'Training Loss/Fold_{fold}', train_loss, epoch)
+            self.writer.add_scalar(f'Validation Accuracy/Fold_{fold}', val_accuracy, epoch)
+    
+    def _train_epoch(self, model, loader, criterion, optimizer):
+        # Training implementation
+        pass
+    
+    def _validate_epoch(self, model, loader):
+        # Validation implementation
+        pass
+    
+    def _compute_class_weights(self, data):
+        # Compute class weights
+        pass
+
+def main():
+    config = CassavaLeafDiseaseConfig(num_epochs=10)
+    classifier = CassavaLeafDiseaseClassifier(config)
+    
+    # Prepare data
+    df = classifier.prepare_data()
+    
+    # Train for each fold
+    for fold in range(config.folds):
+        classifier.train_fold(df, fold)
+
+if __name__ == '__main__':
+    main()
